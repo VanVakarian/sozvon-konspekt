@@ -1,15 +1,13 @@
 package yandexoauth
 
 import (
+	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,7 +27,6 @@ type ManagerConfig struct {
 	ClientSecret string
 	RefreshToken string
 	RedirectURI  string
-	ListenAddr   string
 	EnvFilePath  string
 	Timeout      time.Duration
 	Logger       *slog.Logger
@@ -42,7 +39,6 @@ type Manager struct {
 	clientID     string
 	clientSecret string
 	redirectURI  string
-	listenAddr   string
 	envFilePath  string
 	refreshToken string
 
@@ -60,11 +56,6 @@ type tokenResponse struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-type callbackEndpoint struct {
-	listenAddr string
-	path       string
-}
-
 func NewManager(cfg ManagerConfig) *Manager {
 	logger := cfg.Logger
 	if logger == nil {
@@ -77,7 +68,6 @@ func NewManager(cfg ManagerConfig) *Manager {
 		clientID:     strings.TrimSpace(cfg.ClientID),
 		clientSecret: strings.TrimSpace(cfg.ClientSecret),
 		redirectURI:  strings.TrimSpace(cfg.RedirectURI),
-		listenAddr:   strings.TrimSpace(cfg.ListenAddr),
 		envFilePath:  strings.TrimSpace(cfg.EnvFilePath),
 		refreshToken: strings.TrimSpace(cfg.RefreshToken),
 	}
@@ -129,6 +119,7 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 
 	var refreshErr error
 	if m.refreshToken != "" {
+		m.logger.Info("refreshing oauth access token")
 		response, err := m.requestToken(ctx, url.Values{
 			"grant_type":    {"refresh_token"},
 			"refresh_token": {m.refreshToken},
@@ -140,6 +131,7 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 				return "", applyErr
 			}
 
+			m.logger.Info("oauth access token refreshed")
 			return m.accessToken, nil
 		}
 
@@ -147,7 +139,11 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 		m.logger.Warn("refresh token exchange failed", "error", err)
 	}
 
+	m.logger.Info("oauth authorization required before first disk request", "redirect_uri", m.redirectURI)
+	m.logger.Info("folder scan will continue after oauth authorization completes")
+
 	if code, err := m.waitForAuthorizationCodeLocked(ctx); err == nil {
+		m.logger.Info("oauth authorization code received")
 		return m.exchangeAuthorizationCodeLocked(ctx, code, refreshErr)
 	} else if refreshErr != nil {
 		return "", errors.Join(refreshErr, err)
@@ -157,6 +153,8 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 }
 
 func (m *Manager) exchangeAuthorizationCodeLocked(ctx context.Context, authorizationCode string, refreshErr error) (string, error) {
+	m.logger.Info("exchanging oauth authorization code")
+
 	response, err := m.requestToken(ctx, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {authorizationCode},
@@ -175,98 +173,57 @@ func (m *Manager) exchangeAuthorizationCodeLocked(ctx context.Context, authoriza
 		return "", applyErr
 	}
 
+	m.logger.Info("oauth authorization completed")
+
 	return m.accessToken, nil
 }
 
 func (m *Manager) waitForAuthorizationCodeLocked(ctx context.Context) (string, error) {
-	endpoint, err := parseCallbackEndpoint(m.redirectURI, m.listenAddr)
-	if err != nil {
-		m.logger.Error("oauth authorization required", "url", m.AuthorizationURL())
-		return "", fmt.Errorf("invalid oauth callback configuration: %w", err)
+	if !isScreenCodeRedirectURI(m.redirectURI) {
+		return "", fmt.Errorf("unsupported oauth redirect uri %q: only https://oauth.yandex.ru/verification_code is supported", m.redirectURI)
 	}
 
-	state, err := newOAuthState()
-	if err != nil {
-		return "", fmt.Errorf("generate oauth state: %w", err)
-	}
+	return m.waitForAuthorizationCodeFromTerminal(ctx)
+}
 
-	authorizationURL := m.authorizationURL(state)
+func (m *Manager) waitForAuthorizationCodeFromTerminal(ctx context.Context) (string, error) {
+	m.logger.Info("oauth screen-code flow started", "url", m.AuthorizationURL(), "redirect_uri", m.redirectURI)
+	m.logger.Info("after approving access in the browser, paste the confirmation code into this terminal and press Enter")
+
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
-	serveErrCh := make(chan error, 1)
-	mux := http.NewServeMux()
-	server := &http.Server{
-		Addr:              endpoint.listenAddr,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	mux.HandleFunc(endpoint.path, func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet {
-			writer.WriteHeader(http.StatusMethodNotAllowed)
-			_, _ = writer.Write([]byte("Method not allowed\n"))
-			return
-		}
-
-		if request.URL.Query().Get("state") != state {
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte("Invalid state\n"))
-			return
-		}
-
-		if oauthErr := strings.TrimSpace(request.URL.Query().Get("error")); oauthErr != "" {
-			description := firstNonEmpty(request.URL.Query().Get("error_description"), oauthErr)
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte("Authorization failed\n"))
-			select {
-			case errCh <- fmt.Errorf("oauth authorization failed: %s", description):
-			default:
-			}
-			go shutdownServer(server)
-			return
-		}
-
-		code := strings.TrimSpace(request.URL.Query().Get("code"))
-		if code == "" {
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte("Missing code\n"))
-			return
-		}
-
-		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte("Authorization received. You can close this page.\n"))
-
-		select {
-		case codeCh <- code:
-		default:
-		}
-
-		go shutdownServer(server)
-	})
-
-	listener, err := net.Listen("tcp", endpoint.listenAddr)
-	if err != nil {
-		m.logger.Error("oauth authorization required", "url", authorizationURL)
-		return "", fmt.Errorf("start oauth callback listener on %s: %w", endpoint.listenAddr, err)
-	}
-
-	m.logger.Info("oauth bootstrap waiting for browser authorization", "url", authorizationURL, "callback", m.redirectURI)
 
 	go func() {
-		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			serveErrCh <- serveErr
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			line, err := reader.ReadString('\n')
+			code := strings.TrimSpace(line)
+			if code != "" {
+				codeCh <- code
+				return
+			}
+
+			if err == nil {
+				continue
+			}
+
+			if errors.Is(err, io.EOF) {
+				errCh <- errors.New("stdin closed before confirmation code was entered")
+				return
+			}
+
+			errCh <- err
+			return
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
-		shutdownServer(server)
 		return "", ctx.Err()
 	case err := <-errCh:
 		return "", err
-	case err := <-serveErrCh:
-		return "", fmt.Errorf("oauth callback server failed: %w", err)
 	case code := <-codeCh:
+		m.logger.Info("confirmation code received from terminal")
 		return code, nil
 	}
 }
@@ -296,6 +253,8 @@ func (m *Manager) applyTokenResponseLocked(response tokenResponse) error {
 		if err := updateEnvFile(m.envFilePath, updates); err != nil {
 			return fmt.Errorf("persist oauth data: %w", err)
 		}
+
+		m.logger.Info("oauth refresh token saved", "env_file", m.envFilePath)
 	}
 
 	return nil
@@ -410,57 +369,12 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func parseCallbackEndpoint(rawURL string, listenAddr string) (callbackEndpoint, error) {
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return callbackEndpoint{}, errors.New("redirect uri is empty")
-	}
-
-	parsedURL, err := url.Parse(trimmed)
+func isScreenCodeRedirectURI(rawURL string) bool {
+	parsedURL, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
-		return callbackEndpoint{}, fmt.Errorf("parse redirect uri: %w", err)
+		return false
 	}
 
-	if !strings.EqualFold(parsedURL.Scheme, "http") && !strings.EqualFold(parsedURL.Scheme, "https") {
-		return callbackEndpoint{}, fmt.Errorf("redirect uri %q must use http or https", trimmed)
-	}
-
-	bindAddr := strings.TrimSpace(listenAddr)
-	if bindAddr == "" {
-		if !strings.EqualFold(parsedURL.Scheme, "http") {
-			return callbackEndpoint{}, fmt.Errorf("redirect uri %q requires YADISK_OAUTH_LISTEN_ADDR for callback capture", trimmed)
-		}
-
-		port := parsedURL.Port()
-		if port == "" {
-			port = "80"
-		}
-
-		bindAddr = ":" + port
-	}
-
-	path := parsedURL.EscapedPath()
-	if path == "" {
-		path = "/"
-	}
-
-	return callbackEndpoint{
-		listenAddr: bindAddr,
-		path:       path,
-	}, nil
-}
-
-func newOAuthState() (string, error) {
-	randomBytes := make([]byte, 16)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(randomBytes), nil
-}
-
-func shutdownServer(server *http.Server) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = server.Shutdown(ctx)
+	host := strings.ToLower(parsedURL.Hostname())
+	return (host == "oauth.yandex.ru" || host == "oauth.yandex.com") && parsedURL.EscapedPath() == "/verification_code"
 }

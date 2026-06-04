@@ -55,6 +55,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) runCycle(ctx context.Context) {
+	startedAt := time.Now()
+	a.logger.Info("poll started", "folder", a.cfg.Folder)
+
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			a.logger.Error("poll panic", "panic", recovered, "stack", string(debug.Stack()))
@@ -63,5 +66,8 @@ func (a *App) runCycle(ctx context.Context) {
 
 	if err := a.syncer.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		a.logger.Error("poll failed", "error", err)
+		return
 	}
+
+	a.logger.Info("poll finished", "folder", a.cfg.Folder, "duration", time.Since(startedAt))
 }

@@ -1,63 +1,62 @@
 # sozvon-konspekt
 
-Простая stateless-служба на Go для одной папки Яндекс.Диска.
+Small stateless Go service for one Yandex Disk folder.
 
-Текущая версия делает только базовый цикл:
+## What it does
 
-- опрашивает одну папку на Диске по таймеру;
-- игнорирует вложенные папки и все файлы, кроме .m4a и .txt;
-- если для .m4a нет парного .txt, сразу создаёт пустой .txt-заглушку;
-- если парный .txt пустой и лежит дольше заданного времени, считает задачу зависшей и запускает её заново;
-- скачивает .m4a во временный файл;
-- вызывает заглушку обработчика вместо реальной AI-расшифровки;
-- перезаписывает .txt результатом;
-- при сетевых и временных ошибках не завершает процесс и повторяет попытки.
+- Polls one folder on Yandex Disk.
+- Finds `.m4a` files that do not have a completed `.txt` result.
+- Creates or refreshes an empty `.txt` placeholder.
+- Downloads audio, runs the current stub processor, and uploads the final text.
+- Keeps running on transient network errors.
 
-Сейчас вместо расшифровки пишется технический текст-заглушка. Для реального AI нужно заменить реализацию в internal/transcriber/transcriber.go.
+The current processor is a stub in [internal/transcriber/transcriber.go](internal/transcriber/transcriber.go).
 
-## Переменные окружения
+## Config
 
-- YADISK_CLIENT_ID — Client ID приложения Яндекс OAuth.
-- YADISK_CLIENT_SECRET — Client Secret приложения Яндекс OAuth.
-- YADISK_REFRESH_TOKEN — refresh token для следующих запусков. После первого успешного обмена программа сохранит его в .env сама.
-- YADISK_REDIRECT_URI — Redirect URI приложения. Должен вести обратно на сервер, например http://server-host:17654/oauth/yandex/callback.
-- YADISK_OAUTH_LISTEN_ADDR — локальный bind-адрес встроенного callback listener, если его нельзя однозначно вывести из Redirect URI. Например :17654. Нужен для случая, когда снаружи используется https через reverse proxy, а само приложение слушает локальный http.
-- YADISK_FOLDER — путь к папке на Диске, например disk:/Gemini.
-- POLL_INTERVAL — интервал опроса в секундах, по умолчанию 60.
-- PLACEHOLDER_STALE_AFTER — через сколько секунд пустой .txt считается зависшим, по умолчанию 300.
-- HTTP_TIMEOUT — таймаут одного HTTP-запроса в секундах, по умолчанию 120.
-- LOG_LEVEL — debug, info, warn или error. По умолчанию info.
+Copy [example.env](example.env) to `.env`.
 
-Программа работает только через OAuth bootstrap callback + refresh token. Прямой access token в .env и ручной authorization code больше не поддерживаются. Access token живет только в памяти.
+Change these values:
 
-Полностью без первого пользовательского подтверждения доступ к чужому Яндекс.Диску не получить: официальные OAuth-доки Яндекса описывают пользовательский consent через authorize URL, а дальше уже автоматический обмен code на token и автоматическое обновление через refresh token. Поэтому рабочий сценарий здесь один: процесс сам печатает готовую ссылку, сам ждет redirect callback, сам обменивает code на refresh token и сам продолжает работу без рестарта.
+- `YADISK_CLIENT_ID`
+- `YADISK_CLIENT_SECRET`
+- `YADISK_FOLDER`
 
-## Быстрый запуск
+Keep this value as is:
 
-1. Установить Go. На macOS удобно через Homebrew: brew install go.
-2. Проверить установку: go version.
-3. Перейти в корень проекта.
-4. Скопировать example.env в .env.
+- `YADISK_REDIRECT_URI=https://oauth.yandex.ru/verification_code`
+
+Optional values:
+
+- `YADISK_REFRESH_TOKEN`
+- `POLL_INTERVAL` in seconds, default `60`
+- `PLACEHOLDER_STALE_AFTER` in seconds, default `300`
+- `HTTP_TIMEOUT` in seconds, default `120`
+- `LOG_LEVEL`: `debug`, `info`, `warn`, `error`
+
+## First start
+
+Only one authorization mode is supported: `https://oauth.yandex.ru/verification_code`.
+
+How it works:
+
+1. Start the service.
+2. It prints an authorization URL.
+3. Open that URL in the browser and approve access.
+4. Yandex shows a verification code.
+5. Copy that code, paste it into the terminal, and press Enter.
+
+After the first successful authorization, the service saves `YADISK_REFRESH_TOKEN` to `.env`.
+On the next starts it uses that saved refresh token and usually does not ask for browser authorization again.
+
+## Run
 
 ```bash
 cp example.env .env
-```
-
-5. Настроить Redirect URI для первого запуска.
-
-- В настройках приложения Яндекс OAuth указать Redirect URI, который ведет обратно в этот процесс.
-- Самый простой вариант без proxy: указать адрес вида http://server-host:17654/oauth/yandex/callback и тот же порт открыть на сервере.
-- Если снаружи нужен https, можно завернуть callback через reverse proxy, а приложению оставить локальный bind-адрес в YADISK_OAUTH_LISTEN_ADDR.
-- В .env достаточно заполнить Client ID, Client Secret, Redirect URI и при необходимости YADISK_OAUTH_LISTEN_ADDR.
-- При старте программа сама выведет готовую authorize-ссылку в терминал. Ты открываешь ее в браузере на любой своей машине, логинишься в Яндекс, подтверждаешь доступ, Яндекс редиректит на сервер, а программа сама получает code, сама сохраняет refresh token и продолжает работу без рестарта.
-
-6. Запустить без сборки:
-
-```bash
 go run ./cmd/sozvon-konspekt
 ```
 
-7. Или собрать бинарник:
+Or build a binary:
 
 ```bash
 mkdir -p bin
@@ -65,15 +64,13 @@ go build -o ./bin/sozvon-konspekt ./cmd/sozvon-konspekt
 ./bin/sozvon-konspekt
 ```
 
-На первом успешном запуске программа автоматически дождется OAuth callback и сама обменяет code на refresh token. После этого она сохранит refresh token в .env и на следующих запусках будет получать новый access token через refresh token автоматически. Если API Диска вернет 401, клиент попробует принудительно обновить токен и повторить запрос.
+## Logs
 
-При старте приложение пытается загрузить переменные из файла .env в корне проекта. Если файла .env нет, оно продолжает работать с обычными переменными окружения ОС.
+`info` logs show:
 
-## Структура
-
-- cmd/sozvon-konspekt/main.go — входная точка.
-- internal/config/config.go — загрузка конфигурации.
-- internal/yadisk/client.go — работа с REST API Яндекс.Диска.
-- internal/worker/worker.go — polling и orchestration.
-- internal/transcriber/transcriber.go — интерфейс обработчика и текущая заглушка.
-- internal/app/app.go — бесконечный цикл и защита от паник.
+- poll start and finish
+- when folder listing is requested and when it is blocked by OAuth
+- folder scan summary
+- OAuth bootstrap and token refresh steps
+- per-file processing stages
+- retry events

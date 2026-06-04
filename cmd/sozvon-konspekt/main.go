@@ -33,7 +33,6 @@ func main() {
 		ClientSecret: cfg.ClientSecret,
 		RefreshToken: cfg.RefreshToken,
 		RedirectURI:  cfg.RedirectURI,
-		ListenAddr:   cfg.OAuthListenAddr,
 		EnvFilePath:  cfg.EnvFilePath,
 		Timeout:      cfg.HTTPTimeout,
 		Logger:       logger,

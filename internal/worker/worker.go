@@ -41,14 +41,18 @@ func New(logger *slog.Logger, disk *yadisk.Client, processor transcriber.Process
 }
 
 func (s *Syncer) RunOnce(ctx context.Context) error {
+	s.logger.Info("requesting folder listing", "folder", s.folder)
+
 	resources, err := s.disk.ListFolder(ctx, s.folder)
 	if err != nil {
 		return fmt.Errorf("list folder: %w", err)
 	}
 
+	audioCount, textCount := countFilesByType(resources)
 	candidates := s.collectCandidates(resources, time.Now())
+	s.logger.Info("folder scanned", "folder", s.folder, "resources", len(resources), "audio_files", audioCount, "text_files", textCount, "pending", len(candidates))
 	if len(candidates) == 0 {
-		s.logger.Debug("nothing to process", "folder", s.folder)
+		s.logger.Info("nothing to process", "folder", s.folder)
 		return nil
 	}
 
@@ -61,6 +65,8 @@ func (s *Syncer) RunOnce(ctx context.Context) error {
 			s.logger.Error("processing failed", "audio_path", item.audio.Path, "text_path", item.textPath, "error", err)
 		}
 	}
+
+	s.logger.Info("batch finished", "folder", s.folder, "processed_candidates", len(candidates))
 
 	return nil
 }
@@ -127,6 +133,13 @@ func (s *Syncer) collectCandidates(resources []yadisk.Resource, now time.Time) [
 }
 
 func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
+	action := "create_placeholder"
+	if item.refreshPlaceholder {
+		action = "refresh_placeholder"
+	}
+
+	s.logger.Info("processing file", "audio_path", item.audio.Path, "text_path", item.textPath, "action", action, "audio_size", item.audio.Size)
+
 	if item.refreshPlaceholder {
 		if err := s.disk.UploadBytes(ctx, item.textPath, nil, true); err != nil {
 			return fmt.Errorf("refresh placeholder: %w", err)
@@ -146,6 +159,8 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 		s.logger.Info("placeholder created", "audio_path", item.audio.Path, "text_path", item.textPath)
 	}
 
+	s.logger.Info("downloading audio", "audio_path", item.audio.Path)
+
 	tempFile, err := os.CreateTemp("", "sozvon-*.m4a")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
@@ -162,6 +177,9 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 		return fmt.Errorf("download audio: %w", err)
 	}
 
+	s.logger.Info("audio downloaded", "audio_path", item.audio.Path, "temp_path", tempPath)
+	s.logger.Info("transcription started", "audio_path", item.audio.Path)
+
 	text, err := s.processor.Process(ctx, transcriber.Input{
 		LocalPath:  tempPath,
 		RemotePath: item.audio.Path,
@@ -172,12 +190,35 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 		return fmt.Errorf("process audio: %w", err)
 	}
 
+	s.logger.Info("transcription finished", "audio_path", item.audio.Path, "text_bytes", len(text))
+	s.logger.Info("uploading transcript", "text_path", item.textPath)
+
 	if err := s.disk.UploadBytes(ctx, item.textPath, []byte(text), true); err != nil {
 		return fmt.Errorf("upload text: %w", err)
 	}
 
 	s.logger.Info("file processed", "audio_path", item.audio.Path, "text_path", item.textPath)
 	return nil
+}
+
+func countFilesByType(resources []yadisk.Resource) (int, int) {
+	audioCount := 0
+	textCount := 0
+
+	for _, resource := range resources {
+		if resource.Type != "file" {
+			continue
+		}
+
+		switch strings.ToLower(path.Ext(resource.Name)) {
+		case ".m4a":
+			audioCount++
+		case ".txt":
+			textCount++
+		}
+	}
+
+	return audioCount, textCount
 }
 
 func textPathFor(audio yadisk.Resource) string {

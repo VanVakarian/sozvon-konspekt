@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -16,7 +17,6 @@ type Config struct {
 	ClientSecret          string
 	RefreshToken          string
 	RedirectURI           string
-	OAuthListenAddr       string
 	EnvFilePath           string
 	Folder                string
 	PollInterval          time.Duration
@@ -43,7 +43,6 @@ func Load() (Config, error) {
 	cfg.ClientSecret = strings.TrimSpace(os.Getenv("YADISK_CLIENT_SECRET"))
 	cfg.RefreshToken = strings.TrimSpace(os.Getenv("YADISK_REFRESH_TOKEN"))
 	cfg.RedirectURI = strings.TrimSpace(os.Getenv("YADISK_REDIRECT_URI"))
-	cfg.OAuthListenAddr = strings.TrimSpace(os.Getenv("YADISK_OAUTH_LISTEN_ADDR"))
 	cfg.EnvFilePath = ".env"
 
 	cfg.Folder = normalizeDiskPath(os.Getenv("YADISK_FOLDER"))
@@ -61,6 +60,8 @@ func Load() (Config, error) {
 
 	if cfg.RedirectURI == "" {
 		validationErrs = append(validationErrs, errors.New("YADISK_REDIRECT_URI is required"))
+	} else if err := validateRedirectURI(cfg.RedirectURI); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("YADISK_REDIRECT_URI: %w", err))
 	}
 
 	if value := strings.TrimSpace(os.Getenv("POLL_INTERVAL")); value != "" {
@@ -144,6 +145,24 @@ func parseSeconds(value string) (time.Duration, error) {
 	}
 
 	return time.Duration(seconds) * time.Second, nil
+}
+
+func validateRedirectURI(rawURL string) error {
+	parsedURL, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return errors.New("absolute URL is required")
+	}
+
+	host := strings.ToLower(parsedURL.Hostname())
+	if (host != "oauth.yandex.ru" && host != "oauth.yandex.com") || parsedURL.EscapedPath() != "/verification_code" {
+		return errors.New("must be https://oauth.yandex.ru/verification_code")
+	}
+
+	return nil
 }
 
 func normalizeDiskPath(value string) string {

@@ -349,6 +349,7 @@ func (c *Client) doAuthorized(ctx context.Context, buildRequest func(context.Con
 		return resp, nil
 	}
 
+	c.logger.Warn("disk request returned unauthorized, forcing oauth token refresh")
 	resp.Body.Close()
 
 	token, err = c.tokenSource.ForceRefresh(ctx)
