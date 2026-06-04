@@ -18,6 +18,9 @@ type Config struct {
 	RefreshToken          string
 	RedirectURI           string
 	EnvFilePath           string
+	OpenRouterAPIKey      string
+	OpenRouterModel       string
+	TranscriptionPrompt   string
 	Folder                string
 	PollInterval          time.Duration
 	PlaceholderStaleAfter time.Duration
@@ -31,6 +34,8 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
+		OpenRouterModel:       "google/gemini-2.5-pro",
+		TranscriptionPrompt:   "transcription.prompt.txt",
 		PollInterval:          60 * time.Second,
 		PlaceholderStaleAfter: 300 * time.Second,
 		HTTPTimeout:           120 * time.Second,
@@ -44,10 +49,19 @@ func Load() (Config, error) {
 	cfg.RefreshToken = strings.TrimSpace(os.Getenv("YADISK_REFRESH_TOKEN"))
 	cfg.RedirectURI = strings.TrimSpace(os.Getenv("YADISK_REDIRECT_URI"))
 	cfg.EnvFilePath = ".env"
+	cfg.OpenRouterAPIKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 
 	cfg.Folder = normalizeDiskPath(os.Getenv("YADISK_FOLDER"))
 	if cfg.Folder == "" {
 		validationErrs = append(validationErrs, errors.New("YADISK_FOLDER is required"))
+	}
+
+	if value := strings.TrimSpace(os.Getenv("OPENROUTER_MODEL")); value != "" {
+		cfg.OpenRouterModel = value
+	}
+
+	if value := strings.TrimSpace(os.Getenv("TRANSCRIPTION_PROMPT_FILE")); value != "" {
+		cfg.TranscriptionPrompt = value
 	}
 
 	if cfg.ClientID == "" {
@@ -62,6 +76,18 @@ func Load() (Config, error) {
 		validationErrs = append(validationErrs, errors.New("YADISK_REDIRECT_URI is required"))
 	} else if err := validateRedirectURI(cfg.RedirectURI); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("YADISK_REDIRECT_URI: %w", err))
+	}
+
+	if cfg.OpenRouterAPIKey == "" {
+		validationErrs = append(validationErrs, errors.New("OPENROUTER_API_KEY is required"))
+	}
+
+	if cfg.OpenRouterModel == "" {
+		validationErrs = append(validationErrs, errors.New("OPENROUTER_MODEL is required"))
+	}
+
+	if cfg.TranscriptionPrompt == "" {
+		validationErrs = append(validationErrs, errors.New("TRANSCRIPTION_PROMPT_FILE is required"))
 	}
 
 	if value := strings.TrimSpace(os.Getenv("POLL_INTERVAL")); value != "" {
@@ -110,6 +136,10 @@ func Load() (Config, error) {
 
 	if cfg.HTTPTimeout <= 0 {
 		validationErrs = append(validationErrs, errors.New("HTTP_TIMEOUT must be greater than zero"))
+	}
+
+	if _, err := os.Stat(cfg.TranscriptionPrompt); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("TRANSCRIPTION_PROMPT_FILE: %w", err))
 	}
 
 	if len(validationErrs) > 0 {

@@ -1,0 +1,8 @@
+Transcribe the full audio recording into clean readable text.
+
+Return the complete transcript only.
+Do not summarize.
+Do not add commentary, notes, headings, or markdown.
+Preserve the original language of the speakers.
+If speaker boundaries are obvious, separate replicas by speaker.
+Fix only obvious punctuation and formatting mistakes that improve readability.

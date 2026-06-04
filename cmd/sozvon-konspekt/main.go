@@ -48,7 +48,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	application := app.New(cfg, logger, diskClient, transcriber.NewStub())
+	processor, err := transcriber.NewOpenRouter(transcriber.OpenRouterConfig{
+		APIKey:         cfg.OpenRouterAPIKey,
+		Model:          cfg.OpenRouterModel,
+		PromptFilePath: cfg.TranscriptionPrompt,
+		Timeout:        cfg.HTTPTimeout,
+	})
+	if err != nil {
+		logger.Error("transcriber init error", "error", err)
+		os.Exit(1)
+	}
+
+	application := app.New(cfg, logger, diskClient, processor)
 	if err := application.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("service exited", "error", err)
 		os.Exit(1)

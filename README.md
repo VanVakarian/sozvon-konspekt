@@ -7,20 +7,25 @@ Small stateless Go service for one Yandex Disk folder.
 - Polls one folder on Yandex Disk.
 - Finds `.m4a` files that do not have a completed `.txt` result.
 - Creates or refreshes an empty `.txt` placeholder.
-- Downloads audio, runs the current stub processor, and uploads the final text.
+- Downloads audio, sends prompt plus audio to OpenRouter on the configured Gemini model, and uploads the final text.
 - Keeps running on transient network errors.
-
-The current processor is a stub in [internal/transcriber/transcriber.go](internal/transcriber/transcriber.go).
 
 ## Config
 
 Copy [example.env](example.env) to `.env`.
+Copy [example.transcription.prompt.txt](example.transcription.prompt.txt) to `transcription.prompt.txt`.
 
 Change these values:
 
 - `YADISK_CLIENT_ID`
 - `YADISK_CLIENT_SECRET`
 - `YADISK_FOLDER`
+- `OPENROUTER_API_KEY`
+
+Optional OpenRouter values:
+
+- `OPENROUTER_MODEL`, default `google/gemini-2.5-pro`
+- `TRANSCRIPTION_PROMPT_FILE`, default `transcription.prompt.txt`
 
 Keep this value as is:
 
@@ -33,6 +38,9 @@ Optional values:
 - `PLACEHOLDER_STALE_AFTER` in seconds, default `300`
 - `HTTP_TIMEOUT` in seconds, default `120`
 - `LOG_LEVEL`: `debug`, `info`, `warn`, `error`
+
+The prompt text is stored outside `.env` in `transcription.prompt.txt`.
+Commit the template file [example.transcription.prompt.txt](example.transcription.prompt.txt).
 
 ## First start
 
@@ -53,6 +61,7 @@ On the next starts it uses that saved refresh token and usually does not ask for
 
 ```bash
 cp example.env .env
+cp example.transcription.prompt.txt transcription.prompt.txt
 go run ./cmd/sozvon-konspekt
 ```
 
