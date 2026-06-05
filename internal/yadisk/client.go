@@ -349,7 +349,7 @@ func (c *Client) doAuthorized(ctx context.Context, buildRequest func(context.Con
 		return resp, nil
 	}
 
-	c.logger.Warn("disk request returned unauthorized, forcing oauth token refresh")
+	c.logger.Warn("unauthorized, refreshing token")
 	resp.Body.Close()
 
 	token, err = c.tokenSource.ForceRefresh(ctx)
@@ -392,7 +392,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation string, fn func(cont
 			retryDelay = apiErr.RetryAfter
 		}
 
-		c.logger.Warn("request failed, retrying", "operation", operation, "attempt", attempt, "retry_in", retryDelay, "error", err)
+		c.logger.Warn("request failed, retrying", "operation", operation, "attempt", attempt, "retry in", retryDelay, "error", err)
 
 		if waitErr := waitWithContext(ctx, retryDelay); waitErr != nil {
 			return waitErr

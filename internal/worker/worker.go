@@ -69,7 +69,7 @@ func (s *Syncer) RunOnce(ctx context.Context) (RunSummary, error) {
 			}
 
 			summary.FailedFiles++
-			s.logger.Error("file failed", "name", item.audio.Name, "error", err)
+			s.logger.Error("file failed", "file", item.audio.Name, "error", err)
 			continue
 		}
 
@@ -128,7 +128,7 @@ func (s *Syncer) collectCandidates(resources []yadisk.Resource) []candidate {
 
 func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	startedAt := time.Now()
-	s.logger.Info("file started", "name", item.audio.Name, "audio_size", item.audio.Size)
+	s.logger.Info("processing started", "file", item.audio.Name, "size", item.audio.Size)
 
 	tempFile, err := os.CreateTemp("", "transcription-input-*.m4a")
 	if err != nil {
@@ -167,8 +167,8 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	uploadDuration := time.Since(uploadStartedAt)
 
 	transcriptionLogArgs := []any{
-		"name", item.audio.Name,
-		"text_bytes", len(result.Text),
+		"file", item.audio.Name,
+		"text size", len(result.Text),
 		"download", downloadDuration,
 		"inference", inferenceDuration,
 		"upload", uploadDuration,
@@ -177,14 +177,14 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	if result.Usage.Available {
 		transcriptionLogArgs = append(
 			transcriptionLogArgs,
-			"input_tokens", result.Usage.InputTokens,
-			"output_tokens", result.Usage.OutputTokens,
-			"total_tokens", result.Usage.TotalTokens,
-			"cost", fmt.Sprintf("%.6f", result.Usage.Cost),
-			"cost_rub_approx", fmt.Sprintf("%.4f", result.Usage.Cost*100),
+			"input tokens", result.Usage.InputTokens,
+			"output tokens", result.Usage.OutputTokens,
+			"total tokens", result.Usage.TotalTokens,
+			"cost", result.Usage.Cost,
+			"cost ≈ RUB", result.Usage.Cost*100,
 		)
 	}
-	s.logger.Info("file completed", transcriptionLogArgs...)
+	s.logger.Info("processing completed", transcriptionLogArgs...)
 	return nil
 }
 

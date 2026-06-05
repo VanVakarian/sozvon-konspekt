@@ -10,6 +10,7 @@ import (
 
 	"sozvon-konspekt/internal/app"
 	"sozvon-konspekt/internal/config"
+	"sozvon-konspekt/internal/logger"
 	"sozvon-konspekt/internal/transcriber"
 	"sozvon-konspekt/internal/yadisk"
 	"sozvon-konspekt/internal/yandexoauth"
@@ -18,12 +19,12 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		logger := slog.New(logger.NewHandler(os.Stderr, nil))
 		logger.Error("config error", "error", err)
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	logger := slog.New(logger.NewHandler(os.Stdout, &logger.HandlerOptions{Level: cfg.LogLevel}))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -44,7 +45,7 @@ func main() {
 		Logger:      logger,
 	})
 	if err != nil {
-		logger.Error("disk client init error", "error", err)
+		logger.Error("disk client init failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -55,7 +56,7 @@ func main() {
 		Timeout:        cfg.HTTPTimeout,
 	})
 	if err != nil {
-		logger.Error("transcriber init error", "error", err)
+		logger.Error("transcriber init failed", "error", err)
 		os.Exit(1)
 	}
 

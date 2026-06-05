@@ -119,7 +119,7 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 
 	var refreshErr error
 	if m.refreshToken != "" {
-		m.logger.Info("refreshing oauth access token")
+		m.logger.Info("refreshing access token")
 		response, err := m.requestToken(ctx, url.Values{
 			"grant_type":    {"refresh_token"},
 			"refresh_token": {m.refreshToken},
@@ -131,19 +131,19 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 				return "", applyErr
 			}
 
-			m.logger.Info("oauth access token refreshed")
+			m.logger.Info("access token refreshed")
 			return m.accessToken, nil
 		}
 
 		refreshErr = err
-		m.logger.Warn("refresh token exchange failed", "error", err)
+		m.logger.Warn("token refresh failed", "error", err)
 	}
 
-	m.logger.Info("oauth authorization required before first disk request", "redirect_uri", m.redirectURI)
-	m.logger.Info("folder scan will continue after oauth authorization completes")
+	m.logger.Info("authorization required", "redirect URI", m.redirectURI)
+	m.logger.Info("scan continues after authorization")
 
 	if code, err := m.waitForAuthorizationCodeLocked(ctx); err == nil {
-		m.logger.Info("oauth authorization code received")
+		m.logger.Info("authorization code received")
 		return m.exchangeAuthorizationCodeLocked(ctx, code, refreshErr)
 	} else if refreshErr != nil {
 		return "", errors.Join(refreshErr, err)
@@ -153,7 +153,7 @@ func (m *Manager) obtainAccessTokenLocked(ctx context.Context, forceRefresh bool
 }
 
 func (m *Manager) exchangeAuthorizationCodeLocked(ctx context.Context, authorizationCode string, refreshErr error) (string, error) {
-	m.logger.Info("exchanging oauth authorization code")
+	m.logger.Info("exchanging authorization code")
 
 	response, err := m.requestToken(ctx, url.Values{
 		"grant_type":    {"authorization_code"},
@@ -173,7 +173,7 @@ func (m *Manager) exchangeAuthorizationCodeLocked(ctx context.Context, authoriza
 		return "", applyErr
 	}
 
-	m.logger.Info("oauth authorization completed")
+	m.logger.Info("authorization completed")
 
 	return m.accessToken, nil
 }
@@ -187,7 +187,7 @@ func (m *Manager) waitForAuthorizationCodeLocked(ctx context.Context) (string, e
 }
 
 func (m *Manager) waitForAuthorizationCodeFromTerminal(ctx context.Context) (string, error) {
-	m.logger.Info("oauth screen-code flow started", "url", m.AuthorizationURL(), "redirect_uri", m.redirectURI)
+	m.logger.Info("authorization started", "URL", m.AuthorizationURL(), "redirect URI", m.redirectURI)
 	m.logger.Info("after approving access in the browser, paste the confirmation code into this terminal and press Enter")
 
 	codeCh := make(chan string, 1)
@@ -223,7 +223,7 @@ func (m *Manager) waitForAuthorizationCodeFromTerminal(ctx context.Context) (str
 	case err := <-errCh:
 		return "", err
 	case code := <-codeCh:
-		m.logger.Info("confirmation code received from terminal")
+		m.logger.Info("confirmation code received")
 		return code, nil
 	}
 }
@@ -254,7 +254,7 @@ func (m *Manager) applyTokenResponseLocked(response tokenResponse) error {
 			return fmt.Errorf("persist oauth data: %w", err)
 		}
 
-		m.logger.Info("oauth refresh token saved", "env_file", m.envFilePath)
+		m.logger.Info("refresh token saved", "env file", m.envFilePath)
 	}
 
 	return nil
