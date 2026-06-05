@@ -6,7 +6,6 @@ Small stateless Go service for one Yandex Disk folder.
 
 - Polls one folder on Yandex Disk.
 - Finds `.m4a` files that do not have a completed `.txt` result.
-- Creates or refreshes an empty `.txt` placeholder.
 - Downloads audio, sends prompt plus audio to OpenRouter on the configured Gemini model, and uploads the final text.
 - Keeps running on transient network errors.
 
@@ -35,7 +34,6 @@ Optional values:
 
 - `YADISK_REFRESH_TOKEN`
 - `POLL_INTERVAL` in seconds, default `60`
-- `PLACEHOLDER_STALE_AFTER` in seconds, default `300`
 - `HTTP_TIMEOUT` in seconds, default `120`
 - `LOG_LEVEL`: `debug`, `info`, `warn`, `error`
 

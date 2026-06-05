@@ -53,6 +53,14 @@ type inputAudioPart struct {
 
 type chatCompletionResponse struct {
 	Choices []chatChoice `json:"choices"`
+	Usage   *chatUsage   `json:"usage,omitempty"`
+}
+
+type chatUsage struct {
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	Cost             float64 `json:"cost"`
 }
 
 type chatChoice struct {
@@ -101,15 +109,15 @@ func NewOpenRouter(cfg OpenRouterConfig) (*OpenRouter, error) {
 	}, nil
 }
 
-func (o *OpenRouter) Process(ctx context.Context, input Input) (string, error) {
+func (o *OpenRouter) Process(ctx context.Context, input Input) (Result, error) {
 	audioBytes, err := os.ReadFile(input.LocalPath)
 	if err != nil {
-		return "", fmt.Errorf("read audio file: %w", err)
+		return Result{}, fmt.Errorf("read audio file: %w", err)
 	}
 
 	format, err := detectAudioFormat(input.LocalPath, input.Name)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	request := chatCompletionRequest{
@@ -136,19 +144,30 @@ func (o *OpenRouter) Process(ctx context.Context, input Input) (string, error) {
 
 	var response chatCompletionResponse
 	if err := o.client.Post(ctx, "chat/completions", request, &response); err != nil {
-		return "", fmt.Errorf("openrouter request failed: %w", err)
+		return Result{}, fmt.Errorf("openrouter request failed: %w", err)
 	}
 
 	if len(response.Choices) == 0 {
-		return "", errors.New("openrouter returned no choices")
+		return Result{}, errors.New("openrouter returned no choices")
 	}
 
 	text := strings.TrimSpace(response.Choices[0].Message.Content)
 	if text == "" {
-		return "", errors.New("openrouter returned empty transcription")
+		return Result{}, errors.New("openrouter returned empty transcription")
 	}
 
-	return text, nil
+	result := Result{Text: text}
+	if response.Usage != nil {
+		result.Usage = Usage{
+			InputTokens:  response.Usage.PromptTokens,
+			OutputTokens: response.Usage.CompletionTokens,
+			TotalTokens:  response.Usage.TotalTokens,
+			Cost:         response.Usage.Cost,
+			Available:    true,
+		}
+	}
+
+	return result, nil
 
 }
 

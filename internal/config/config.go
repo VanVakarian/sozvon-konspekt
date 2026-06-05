@@ -13,19 +13,18 @@ import (
 )
 
 type Config struct {
-	ClientID              string
-	ClientSecret          string
-	RefreshToken          string
-	RedirectURI           string
-	EnvFilePath           string
-	OpenRouterAPIKey      string
-	OpenRouterModel       string
-	TranscriptionPrompt   string
-	Folder                string
-	PollInterval          time.Duration
-	PlaceholderStaleAfter time.Duration
-	HTTPTimeout           time.Duration
-	LogLevel              slog.Level
+	ClientID            string
+	ClientSecret        string
+	RefreshToken        string
+	RedirectURI         string
+	EnvFilePath         string
+	OpenRouterAPIKey    string
+	OpenRouterModel     string
+	TranscriptionPrompt string
+	Folder              string
+	PollInterval        time.Duration
+	HTTPTimeout         time.Duration
+	LogLevel            slog.Level
 }
 
 func Load() (Config, error) {
@@ -34,12 +33,11 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		OpenRouterModel:       "google/gemini-2.5-pro",
-		TranscriptionPrompt:   "transcription.prompt.txt",
-		PollInterval:          60 * time.Second,
-		PlaceholderStaleAfter: 300 * time.Second,
-		HTTPTimeout:           120 * time.Second,
-		LogLevel:              slog.LevelInfo,
+		OpenRouterModel:     "google/gemini-2.5-pro",
+		TranscriptionPrompt: "transcription.prompt.txt",
+		PollInterval:        60 * time.Second,
+		HTTPTimeout:         120 * time.Second,
+		LogLevel:            slog.LevelInfo,
 	}
 
 	var validationErrs []error
@@ -99,15 +97,6 @@ func Load() (Config, error) {
 		}
 	}
 
-	if value := strings.TrimSpace(os.Getenv("PLACEHOLDER_STALE_AFTER")); value != "" {
-		duration, err := parseSeconds(value)
-		if err != nil {
-			validationErrs = append(validationErrs, fmt.Errorf("PLACEHOLDER_STALE_AFTER: %w", err))
-		} else {
-			cfg.PlaceholderStaleAfter = duration
-		}
-	}
-
 	if value := strings.TrimSpace(os.Getenv("HTTP_TIMEOUT")); value != "" {
 		duration, err := parseSeconds(value)
 		if err != nil {
@@ -128,10 +117,6 @@ func Load() (Config, error) {
 
 	if cfg.PollInterval <= 0 {
 		validationErrs = append(validationErrs, errors.New("POLL_INTERVAL must be greater than zero"))
-	}
-
-	if cfg.PlaceholderStaleAfter <= 0 {
-		validationErrs = append(validationErrs, errors.New("PLACEHOLDER_STALE_AFTER must be greater than zero"))
 	}
 
 	if cfg.HTTPTimeout <= 0 {

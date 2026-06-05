@@ -16,62 +16,70 @@ import (
 )
 
 type Syncer struct {
-	logger     *slog.Logger
-	disk       *yadisk.Client
-	processor  transcriber.Processor
-	folder     string
-	staleAfter time.Duration
+	logger    *slog.Logger
+	disk      *yadisk.Client
+	processor transcriber.Processor
+	folder    string
+}
+
+type RunSummary struct {
+	Resources      int
+	AudioFiles     int
+	TextFiles      int
+	ProcessedFiles int
+	FailedFiles    int
 }
 
 type candidate struct {
-	audio              yadisk.Resource
-	textExists         bool
-	refreshPlaceholder bool
-	textPath           string
+	audio    yadisk.Resource
+	textPath string
 }
 
-func New(logger *slog.Logger, disk *yadisk.Client, processor transcriber.Processor, folder string, staleAfter time.Duration) *Syncer {
+func New(logger *slog.Logger, disk *yadisk.Client, processor transcriber.Processor, folder string) *Syncer {
 	return &Syncer{
-		logger:     logger,
-		disk:       disk,
-		processor:  processor,
-		folder:     folder,
-		staleAfter: staleAfter,
+		logger:    logger,
+		disk:      disk,
+		processor: processor,
+		folder:    folder,
 	}
 }
 
-func (s *Syncer) RunOnce(ctx context.Context) error {
-	s.logger.Info("requesting folder listing", "folder", s.folder)
-
+func (s *Syncer) RunOnce(ctx context.Context) (RunSummary, error) {
 	resources, err := s.disk.ListFolder(ctx, s.folder)
 	if err != nil {
-		return fmt.Errorf("list folder: %w", err)
+		return RunSummary{}, fmt.Errorf("list folder: %w", err)
 	}
 
 	audioCount, textCount := countFilesByType(resources)
-	candidates := s.collectCandidates(resources, time.Now())
-	s.logger.Info("folder scanned", "folder", s.folder, "resources", len(resources), "audio_files", audioCount, "text_files", textCount, "pending", len(candidates))
+	summary := RunSummary{
+		Resources:  len(resources),
+		AudioFiles: audioCount,
+		TextFiles:  textCount,
+	}
+
+	candidates := s.collectCandidates(resources)
 	if len(candidates) == 0 {
-		s.logger.Info("nothing to process", "folder", s.folder)
-		return nil
+		return summary, nil
 	}
 
 	for _, item := range candidates {
 		if err := s.processCandidate(ctx, item); err != nil {
 			if errors.Is(err, context.Canceled) {
-				return err
+				return summary, err
 			}
 
-			s.logger.Error("processing failed", "audio_path", item.audio.Path, "text_path", item.textPath, "error", err)
+			summary.FailedFiles++
+			s.logger.Error("file failed", "name", item.audio.Name, "error", err)
+			continue
 		}
+
+		summary.ProcessedFiles++
 	}
 
-	s.logger.Info("batch finished", "folder", s.folder, "processed_candidates", len(candidates))
-
-	return nil
+	return summary, nil
 }
 
-func (s *Syncer) collectCandidates(resources []yadisk.Resource, now time.Time) []candidate {
+func (s *Syncer) collectCandidates(resources []yadisk.Resource) []candidate {
 	audioFiles := make([]yadisk.Resource, 0)
 	textFiles := make(map[string]yadisk.Resource)
 
@@ -105,27 +113,13 @@ func (s *Syncer) collectCandidates(resources []yadisk.Resource, now time.Time) [
 	for _, audio := range audioFiles {
 		textPath := textPathFor(audio)
 		textResource, ok := textFiles[stemKey(audio.Name)]
-		if !ok {
-			candidates = append(candidates, candidate{
-				audio:    audio,
-				textPath: textPath,
-			})
-			continue
-		}
-
-		if textResource.Size > 0 {
-			continue
-		}
-
-		if now.Sub(textResource.Modified) < s.staleAfter {
+		if ok && textResource.Size > 0 {
 			continue
 		}
 
 		candidates = append(candidates, candidate{
-			audio:              audio,
-			textExists:         true,
-			refreshPlaceholder: true,
-			textPath:           textPath,
+			audio:    audio,
+			textPath: textPath,
 		})
 	}
 
@@ -133,35 +127,10 @@ func (s *Syncer) collectCandidates(resources []yadisk.Resource, now time.Time) [
 }
 
 func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
-	action := "create_placeholder"
-	if item.refreshPlaceholder {
-		action = "refresh_placeholder"
-	}
+	startedAt := time.Now()
+	s.logger.Info("file started", "name", item.audio.Name, "audio_size", item.audio.Size)
 
-	s.logger.Info("processing file", "audio_path", item.audio.Path, "text_path", item.textPath, "action", action, "audio_size", item.audio.Size)
-
-	if item.refreshPlaceholder {
-		if err := s.disk.UploadBytes(ctx, item.textPath, nil, true); err != nil {
-			return fmt.Errorf("refresh placeholder: %w", err)
-		}
-
-		s.logger.Info("placeholder refreshed", "audio_path", item.audio.Path, "text_path", item.textPath)
-	} else {
-		if err := s.disk.UploadBytes(ctx, item.textPath, nil, false); err != nil {
-			if errors.Is(err, yadisk.ErrAlreadyExists) {
-				s.logger.Warn("placeholder already exists", "audio_path", item.audio.Path, "text_path", item.textPath)
-				return nil
-			}
-
-			return fmt.Errorf("create placeholder: %w", err)
-		}
-
-		s.logger.Info("placeholder created", "audio_path", item.audio.Path, "text_path", item.textPath)
-	}
-
-	s.logger.Info("downloading audio", "audio_path", item.audio.Path)
-
-	tempFile, err := os.CreateTemp("", "sozvon-*.m4a")
+	tempFile, err := os.CreateTemp("", "transcription-input-*.m4a")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
@@ -173,14 +142,14 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	}
 	defer os.Remove(tempPath)
 
+	downloadStartedAt := time.Now()
 	if err := s.disk.DownloadToFile(ctx, item.audio.Path, tempPath); err != nil {
 		return fmt.Errorf("download audio: %w", err)
 	}
+	downloadDuration := time.Since(downloadStartedAt)
 
-	s.logger.Info("audio downloaded", "audio_path", item.audio.Path, "temp_path", tempPath)
-	s.logger.Info("transcription started", "audio_path", item.audio.Path)
-
-	text, err := s.processor.Process(ctx, transcriber.Input{
+	inferenceStartedAt := time.Now()
+	result, err := s.processor.Process(ctx, transcriber.Input{
 		LocalPath:  tempPath,
 		RemotePath: item.audio.Path,
 		Name:       item.audio.Name,
@@ -189,15 +158,33 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	if err != nil {
 		return fmt.Errorf("process audio: %w", err)
 	}
+	inferenceDuration := time.Since(inferenceStartedAt)
 
-	s.logger.Info("transcription finished", "audio_path", item.audio.Path, "text_bytes", len(text))
-	s.logger.Info("uploading transcript", "text_path", item.textPath)
-
-	if err := s.disk.UploadBytes(ctx, item.textPath, []byte(text), true); err != nil {
+	uploadStartedAt := time.Now()
+	if err := s.disk.UploadBytes(ctx, item.textPath, []byte(result.Text), true); err != nil {
 		return fmt.Errorf("upload text: %w", err)
 	}
+	uploadDuration := time.Since(uploadStartedAt)
 
-	s.logger.Info("file processed", "audio_path", item.audio.Path, "text_path", item.textPath)
+	transcriptionLogArgs := []any{
+		"name", item.audio.Name,
+		"text_bytes", len(result.Text),
+		"download", downloadDuration,
+		"inference", inferenceDuration,
+		"upload", uploadDuration,
+		"total", time.Since(startedAt),
+	}
+	if result.Usage.Available {
+		transcriptionLogArgs = append(
+			transcriptionLogArgs,
+			"input_tokens", result.Usage.InputTokens,
+			"output_tokens", result.Usage.OutputTokens,
+			"total_tokens", result.Usage.TotalTokens,
+			"cost", fmt.Sprintf("%.6f", result.Usage.Cost),
+			"cost_rub_approx", fmt.Sprintf("%.4f", result.Usage.Cost*100),
+		)
+	}
+	s.logger.Info("file completed", transcriptionLogArgs...)
 	return nil
 }
 
