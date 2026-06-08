@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path"
 	"sort"
@@ -128,7 +129,6 @@ func (s *Syncer) collectCandidates(resources []yadisk.Resource) []candidate {
 
 func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	startedAt := time.Now()
-	s.logger.Info("processing started", "file", item.audio.Name, "size", item.audio.Size)
 
 	tempFile, err := os.CreateTemp("", "transcription-input-*.m4a")
 	if err != nil {
@@ -147,6 +147,21 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 		return fmt.Errorf("download audio: %w", err)
 	}
 	downloadDuration := time.Since(downloadStartedAt)
+
+	startLogArgs := []any{
+		"file", item.audio.Name,
+		"size", formatSize(item.audio.Size),
+	}
+
+	audioDuration, err := parseM4ADuration(tempPath)
+	if err != nil {
+		s.logger.Warn("audio duration parse failed", "file", item.audio.Name, "error", err)
+	}
+	if audioDuration > 0 {
+		startLogArgs = append(startLogArgs, "duration", formatDuration(audioDuration))
+	}
+
+	s.logger.Info("processing started", startLogArgs...)
 
 	inferenceStartedAt := time.Now()
 	result, err := s.processor.Process(ctx, transcriber.Input{
@@ -167,8 +182,7 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	uploadDuration := time.Since(uploadStartedAt)
 
 	transcriptionLogArgs := []any{
-		"file", item.audio.Name,
-		"text size", len(result.Text),
+		"text size", formatSize(int64(len(result.Text))),
 		"download", downloadDuration,
 		"inference", inferenceDuration,
 		"upload", uploadDuration,
@@ -180,7 +194,7 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 			"input tokens", result.Usage.InputTokens,
 			"output tokens", result.Usage.OutputTokens,
 			"total tokens", result.Usage.TotalTokens,
-			"cost", result.Usage.Cost,
+			"cost", fmt.Sprintf("$%.2f", result.Usage.Cost),
 			"cost ≈ RUB", result.Usage.Cost*100,
 		)
 	}
@@ -231,4 +245,25 @@ func pickPreferredText(left yadisk.Resource, right yadisk.Resource) yadisk.Resou
 	}
 
 	return left
+}
+
+func formatSize(bytes int64) string {
+	const unit = 1024
+	abs := bytes
+	if abs < 0 {
+		abs = -abs
+	}
+	if abs < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div := int64(unit)
+	exp := 0
+	for n := abs / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	suffix := string("KMGTPE"[exp])
+	value := float64(bytes) / float64(div)
+	rounded := math.Round(value*10) / 10
+	return fmt.Sprintf("%.1f %sB", rounded, suffix)
 }
