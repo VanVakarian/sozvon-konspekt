@@ -24,6 +24,7 @@ type Config struct {
 	Folder              string
 	PollInterval        time.Duration
 	HTTPTimeout         time.Duration
+	ConvertAudio        bool
 	LogLevel            slog.Level
 }
 
@@ -38,6 +39,7 @@ func Load() (Config, error) {
 		PollInterval:        60 * time.Second,
 		HTTPTimeout:         120 * time.Second,
 		LogLevel:            slog.LevelInfo,
+		ConvertAudio:        false,
 	}
 
 	var validationErrs []error
@@ -121,6 +123,17 @@ func Load() (Config, error) {
 
 	if cfg.HTTPTimeout <= 0 {
 		validationErrs = append(validationErrs, errors.New("HTTP_TIMEOUT must be greater than zero"))
+	}
+
+	if value := strings.TrimSpace(os.Getenv("CONVERT_AUDIO")); value != "" {
+		switch strings.ToLower(value) {
+		case "true", "1", "yes":
+			cfg.ConvertAudio = true
+		case "false", "0", "no":
+			cfg.ConvertAudio = false
+		default:
+			validationErrs = append(validationErrs, fmt.Errorf("CONVERT_AUDIO must be true/false, got %q", value))
+		}
 	}
 
 	if _, err := os.Stat(cfg.TranscriptionPrompt); err != nil {

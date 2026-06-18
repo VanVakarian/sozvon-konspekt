@@ -17,10 +17,11 @@ import (
 )
 
 type Syncer struct {
-	logger    *slog.Logger
-	disk      *yadisk.Client
-	processor transcriber.Processor
-	folder    string
+	logger       *slog.Logger
+	disk         *yadisk.Client
+	processor    transcriber.Processor
+	folder       string
+	convertAudio bool
 }
 
 type RunSummary struct {
@@ -36,12 +37,13 @@ type candidate struct {
 	textPath string
 }
 
-func New(logger *slog.Logger, disk *yadisk.Client, processor transcriber.Processor, folder string) *Syncer {
+func New(logger *slog.Logger, disk *yadisk.Client, processor transcriber.Processor, folder string, convertAudio bool) *Syncer {
 	return &Syncer{
-		logger:    logger,
-		disk:      disk,
-		processor: processor,
-		folder:    folder,
+		logger:       logger,
+		disk:         disk,
+		processor:    processor,
+		folder:       folder,
+		convertAudio: convertAudio,
 	}
 }
 
@@ -142,30 +144,79 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	}
 	defer os.Remove(tempPath)
 
+	s.logger.Info("downloading", "file", item.audio.Name, "size", formatSize(item.audio.Size))
+
 	downloadStartedAt := time.Now()
 	if err := s.disk.DownloadToFile(ctx, item.audio.Path, tempPath); err != nil {
 		return fmt.Errorf("download audio: %w", err)
 	}
 	downloadDuration := time.Since(downloadStartedAt)
 
-	startLogArgs := []any{
+	s.logger.Info("downloaded",
 		"file", item.audio.Name,
-		"size", formatSize(item.audio.Size),
+		"duration", downloadDuration.Round(time.Millisecond),
+	)
+
+	audioPath := tempPath
+	var convertCleanup func()
+
+	if s.convertAudio {
+		convertStartedAt := time.Now()
+		convertedPath, cleanup, convertErr := convertAudioForInference(ctx, tempPath)
+		convertDuration := time.Since(convertStartedAt)
+
+		if convertErr != nil {
+			if strings.Contains(convertErr.Error(), "ffmpeg not found") {
+				s.logger.Error("conversion unavailable: ffmpeg not found, sending original",
+					"file", item.audio.Name,
+				)
+			} else {
+				s.logger.Error("conversion failed, sending original",
+					"file", item.audio.Name,
+					"error", convertErr,
+				)
+			}
+		} else {
+			origInfo, _ := os.Stat(tempPath)
+			convInfo, _ := os.Stat(convertedPath)
+			origSize := int64(0)
+			convSize := int64(0)
+			if origInfo != nil {
+				origSize = origInfo.Size()
+			}
+			if convInfo != nil {
+				convSize = convInfo.Size()
+			}
+			s.logger.Info("converted audio",
+				"file", item.audio.Name,
+				"original size", formatSize(origSize),
+				"compressed size", formatSize(convSize),
+				"duration", convertDuration.Round(time.Millisecond),
+			)
+			audioPath = convertedPath
+			convertCleanup = cleanup
+		}
 	}
 
-	audioDuration, err := parseM4ADuration(tempPath)
+	defer func() {
+		if convertCleanup != nil {
+			convertCleanup()
+		}
+	}()
+
+	durationLogArgs := []any{"file", item.audio.Name}
+	audioDuration, err := parseM4ADuration(audioPath)
 	if err != nil {
 		s.logger.Warn("audio duration parse failed", "file", item.audio.Name, "error", err)
 	}
 	if audioDuration > 0 {
-		startLogArgs = append(startLogArgs, "duration", formatDuration(audioDuration))
+		durationLogArgs = append(durationLogArgs, "duration", formatDuration(audioDuration))
 	}
-
-	s.logger.Info("processing started", startLogArgs...)
+	s.logger.Info("transcribing", durationLogArgs...)
 
 	inferenceStartedAt := time.Now()
 	result, err := s.processor.Process(ctx, transcriber.Input{
-		LocalPath:  tempPath,
+		LocalPath:  audioPath,
 		RemotePath: item.audio.Path,
 		Name:       item.audio.Name,
 		Size:       item.audio.Size,
@@ -181,24 +232,24 @@ func (s *Syncer) processCandidate(ctx context.Context, item candidate) error {
 	}
 	uploadDuration := time.Since(uploadStartedAt)
 
-	transcriptionLogArgs := []any{
+	completedLogArgs := []any{
 		"text size", formatSize(int64(len(result.Text))),
-		"download", downloadDuration,
-		"inference", inferenceDuration,
-		"upload", uploadDuration,
-		"total", time.Since(startedAt),
+		"download", downloadDuration.Round(time.Millisecond),
+		"inference", inferenceDuration.Round(time.Millisecond),
+		"upload", uploadDuration.Round(time.Millisecond),
+		"total", time.Since(startedAt).Round(time.Millisecond),
 	}
 	if result.Usage.Available {
-		transcriptionLogArgs = append(
-			transcriptionLogArgs,
+		completedLogArgs = append(
+			completedLogArgs,
 			"input tokens", result.Usage.InputTokens,
 			"output tokens", result.Usage.OutputTokens,
 			"total tokens", result.Usage.TotalTokens,
 			"cost", fmt.Sprintf("$%.2f", result.Usage.Cost),
-			"cost ≈ RUB", result.Usage.Cost*100,
+			"cost ≈ RUB", fmt.Sprintf("%.2f", result.Usage.Cost*100),
 		)
 	}
-	s.logger.Info("processing completed", transcriptionLogArgs...)
+	s.logger.Info("transcription completed", completedLogArgs...)
 	return nil
 }
 

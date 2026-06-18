@@ -23,7 +23,7 @@ func New(cfg config.Config, logger *slog.Logger, disk *yadisk.Client, processor 
 	return &App{
 		cfg:    cfg,
 		logger: logger,
-		syncer: worker.New(logger, disk, processor, cfg.Folder),
+		syncer: worker.New(logger, disk, processor, cfg.Folder, cfg.ConvertAudio),
 	}
 }
 
