@@ -25,6 +25,7 @@ type Config struct {
 	PollInterval        time.Duration
 	HTTPTimeout         time.Duration
 	ConvertAudio        bool
+	LogDir              string
 	LogLevel            slog.Level
 }
 
@@ -40,6 +41,7 @@ func Load() (Config, error) {
 		HTTPTimeout:         120 * time.Second,
 		LogLevel:            slog.LevelInfo,
 		ConvertAudio:        false,
+		LogDir:              "log",
 	}
 
 	var validationErrs []error
@@ -123,6 +125,10 @@ func Load() (Config, error) {
 
 	if cfg.HTTPTimeout <= 0 {
 		validationErrs = append(validationErrs, errors.New("HTTP_TIMEOUT must be greater than zero"))
+	}
+
+	if value := strings.TrimSpace(os.Getenv("LOG_DIR")); value != "" {
+		cfg.LogDir = value
 	}
 
 	if value := strings.TrimSpace(os.Getenv("CONVERT_AUDIO")); value != "" {

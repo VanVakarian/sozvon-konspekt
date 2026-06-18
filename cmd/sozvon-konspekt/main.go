@@ -19,12 +19,17 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		logger := slog.New(logger.NewHandler(os.Stderr, nil))
-		logger.Error("config error", "error", err)
+		fbLog := slog.New(logger.NewHandler(os.Stderr, nil))
+		fbLog.Error("config error", "error", err)
 		os.Exit(1)
 	}
 
-	logger := slog.New(logger.NewHandler(os.Stdout, &logger.HandlerOptions{Level: cfg.LogLevel}))
+	logr, err := logger.Setup(cfg.LogDir, &logger.HandlerOptions{Level: cfg.LogLevel})
+	if err != nil {
+		fbLog := slog.New(logger.NewHandler(os.Stderr, nil))
+		fbLog.Error("logger setup failed", "error", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -36,16 +41,16 @@ func main() {
 		RedirectURI:  cfg.RedirectURI,
 		EnvFilePath:  cfg.EnvFilePath,
 		Timeout:      cfg.HTTPTimeout,
-		Logger:       logger,
+		Logger:       logr,
 	})
 
 	diskClient, err := yadisk.NewClient(yadisk.ClientConfig{
 		TokenSource: tokenSource,
 		Timeout:     cfg.HTTPTimeout,
-		Logger:      logger,
+		Logger:      logr,
 	})
 	if err != nil {
-		logger.Error("disk client init failed", "error", err)
+		logr.Error("disk client init failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -56,13 +61,13 @@ func main() {
 		Timeout:        cfg.HTTPTimeout,
 	})
 	if err != nil {
-		logger.Error("transcriber init failed", "error", err)
+		logr.Error("transcriber init failed", "error", err)
 		os.Exit(1)
 	}
 
-	application := app.New(cfg, logger, diskClient, processor)
+	application := app.New(cfg, logr, diskClient, processor)
 	if err := application.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		logger.Error("service exited", "error", err)
+		logr.Error("service exited", "error", err)
 		os.Exit(1)
 	}
 }
