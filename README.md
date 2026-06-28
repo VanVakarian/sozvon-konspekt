@@ -11,7 +11,14 @@ Small stateless Go service for one Yandex Disk folder.
 
 ## Config
 
-Copy [example.env](example.env) to `.env`.
+Copy [.env.example](.env.example) to `.env` for local dev. The binary prefers
+a bare `.env` if present; otherwise it falls back to the alphabetically-first
+`.env.<id>` file in the working directory (e.g. `.env.95-182-83-180` for a
+specific server), skipping `.env.example`. Naming a server's file `.env.<id>`
+instead of plain `.env` is optional but makes it obvious at a glance which
+environment it belongs to when several deploys share the same server. If
+neither exists, the process refuses to start.
+
 Copy [example.transcription.prompt.txt](example.transcription.prompt.txt) to `transcription.prompt.txt`.
 
 Change these values:
@@ -52,13 +59,14 @@ How it works:
 4. Yandex shows a verification code.
 5. Copy that code, paste it into the terminal, and press Enter.
 
-After the first successful authorization, the service saves `YADISK_REFRESH_TOKEN` to `.env`.
+After the first successful authorization, the service saves `YADISK_REFRESH_TOKEN` to
+whichever env file it loaded at startup.
 On the next starts it uses that saved refresh token and usually does not ask for browser authorization again.
 
 ## Run
 
 ```bash
-cp example.env .env
+cp .env.example .env
 cp example.transcription.prompt.txt transcription.prompt.txt
 go run ./cmd/sozvon-konspekt
 ```

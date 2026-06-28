@@ -32,13 +32,18 @@ ssh root@<server_ip> install -d -m 755 /root/sozvon-konspekt
 ssh root@<server_ip> 'apt-get update && apt-get install -y ffmpeg'
 ```
 
-Закинуть на сервер (на основе `example.env` / `example.transcription.prompt.txt`,
-оба гитигнорены, как и на любом локальном инстансе):
+Закинуть на сервер (на основе `.env.example` / `example.transcription.prompt.txt`,
+оба гитигнорены, как и на любом локальном инстансе). Бинарь сначала ищет
+голый `.env`, и только если его нет — алфавитно первый `.env.<id>` в рабочей
+директории (кроме `.env.example`). На сервере используем именно `.env.<id>`
+(`<id>` — что угодно после `.env.`, обычно IP сервера), чтобы по имени файла
+сразу было видно, какому серверу он принадлежит. Если не найдено ни одного
+варианта — бинарь не стартует, это ошибка конфигурации.
 
 ```bash
-scp -p .env root@<server_ip>:/root/sozvon-konspekt/.env
+scp -p .env.95-182-83-180 root@<server_ip>:/root/sozvon-konspekt/.env.95-182-83-180
 scp -p transcription.prompt.txt root@<server_ip>:/root/sozvon-konspekt/transcription.prompt.txt
-ssh root@<server_ip> chmod 600 /root/sozvon-konspekt/.env
+ssh root@<server_ip> chmod 600 /root/sozvon-konspekt/.env.95-182-83-180
 ```
 
 `/etc/systemd/system/sozvon-konspekt.service`:
@@ -68,7 +73,7 @@ ssh root@<server_ip> 'systemctl daemon-reload && systemctl enable sozvon-konspek
 
 ## OAuth-бутстрап Яндекс.Диска (важно, делать до или сразу после первого деплоя)
 
-Приложению для работы нужен `YADISK_REFRESH_TOKEN`. Если его нет в `.env`
+Приложению для работы нужен `YADISK_REFRESH_TOKEN`. Если его нет в `.env.<id>`
 (первый запуск) или Яндекс отозвал токен — приложение не может продолжить
 без авторизации в браузере, см. `internal/yandexoauth/manager.go`.
 
@@ -91,7 +96,8 @@ code was entered` и рестарт юнита по `Restart=always`. Это н�
    нажимаем Enter — это тот же `bufio.Reader(os.Stdin)`, что и при
    локальном запуске.
 7. Лог печатает `authorization completed`, `YADISK_REFRESH_TOKEN`
-   автоматически сохраняется в `.env` на сервере.
+   автоматически сохраняется в тот же env-файл, который был подхвачен при
+   старте.
 8. `Ctrl+C`, чтобы остановить форграунд-запуск.
 9. `systemctl start sozvon-konspekt` — дальше токен только обновляется
    автоматически, новая авторизация не нужна, пока Яндекс не отозвёт доступ.

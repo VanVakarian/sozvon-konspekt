@@ -5,8 +5,47 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 )
+
+const envExampleFile = ".env.example"
+
+// pickEnvFile resolves which env file to load, in priority order: a bare
+// ".env" first, then the alphabetically-first ".env.<id>" file in the
+// working directory (skipping the tracked-in-git example template). Neither
+// existing is a deploy mistake, not a state the binary should run with.
+func pickEnvFile() (string, error) {
+	if fileExists(".env") {
+		return ".env", nil
+	}
+
+	matches, err := filepath.Glob(".env.*")
+	if err != nil {
+		return "", fmt.Errorf("glob env files: %w", err)
+	}
+	sort.Strings(matches)
+
+	for _, match := range matches {
+		if match == envExampleFile {
+			continue
+		}
+		if fileExists(match) {
+			return match, nil
+		}
+	}
+
+	return "", errors.New("no .env or .env.<id> file found in working directory")
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
 
 func loadDotEnvFile(filePath string) error {
 	file, err := os.Open(filePath)
