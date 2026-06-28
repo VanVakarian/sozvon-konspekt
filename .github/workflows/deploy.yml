@@ -1,0 +1,96 @@
+name: Deploy to PROD
+
+on:
+  push:
+    branches:
+      - 'deploy-*'
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Specific commit SHA (optional, leave empty for latest)'
+        required: false
+        type: string
+
+jobs:
+  resolve-environment:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+    steps:
+      # Convention: branch "deploy-<id>" deploys to GitHub Environment
+      # "VPS_<id>". Adding server #2/#3 is just a new branch + a new
+      # environment with its own HOST/USER/SSH_KEY secrets — this file
+      # never needs to change again.
+      - name: Derive VPS_<id> from branch name
+        id: resolve
+        run: |
+          set -eu
+          server_id="${GITHUB_REF_NAME#deploy-}"
+          if [ "$server_id" = "$GITHUB_REF_NAME" ]; then
+            echo "branch '$GITHUB_REF_NAME' does not match 'deploy-<server_id>'" >&2
+            exit 1
+          fi
+          echo "environment=VPS_${server_id}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy
+    needs: resolve-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-environment.outputs.environment }}
+    concurrency:
+      group: deploy-sozvon-konspekt-${{ github.ref_name }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out selected commit
+        if: ${{ github.event.inputs.commit_sha != '' }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.commit_sha }}
+
+      - name: Check out workflow commit
+        if: ${{ github.event.inputs.commit_sha == '' }}
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Build binary
+        run: |
+          set -eu
+          rm -rf deploy
+          mkdir -p deploy
+          GOOS=linux GOARCH=amd64 go build -trimpath -o deploy/sozvon-konspekt ./cmd/sozvon-konspekt
+
+      - name: Upload binary
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: deploy/sozvon-konspekt
+          target: /root/sozvon-konspekt
+          overwrite: true
+
+      - name: Activate binary
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -eu
+            cd /root/sozvon-konspekt
+            mv -f deploy/sozvon-konspekt sozvon-konspekt
+            rmdir --ignore-fail-on-non-empty deploy || true
+            chmod 755 sozvon-konspekt
+            systemctl daemon-reload
+            systemctl restart sozvon-konspekt
+            systemctl is-active --quiet sozvon-konspekt

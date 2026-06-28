@@ -71,6 +71,12 @@ go build -o ./bin/sozvon-konspekt ./cmd/sozvon-konspekt
 ./bin/sozvon-konspekt
 ```
 
+## Deploy
+
+For production deploy via CI (push to a `deploy-<id>` branch) and the
+one-time server bootstrap, including the Yandex OAuth flow over SSH, see
+[DEPLOY.md](DEPLOY.md).
+
 ## Logs
 
 `info` logs show:
