@@ -80,7 +80,7 @@ func (a *App) runCycle(ctx context.Context) {
 
 	summary, err := a.syncer.RunOnce(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		a.logger.Error("poll failed", "error", err, "duration", time.Since(startedAt))
+		a.logger.Error("poll failed", "error", err, "elapsed", time.Since(startedAt))
 		return
 	}
 
@@ -96,7 +96,7 @@ func (a *App) runCycle(ctx context.Context) {
 		summary.ProcessedFiles,
 		"failed",
 		summary.FailedFiles,
-		"duration",
+		"elapsed",
 		time.Since(startedAt),
 	)
 }
