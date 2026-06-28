@@ -30,8 +30,13 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	if err := loadDotEnvFile(".env"); err != nil {
-		return Config{}, fmt.Errorf("load .env: %w", err)
+	envFilePath, err := pickEnvFile()
+	if err != nil {
+		return Config{}, fmt.Errorf("pick env file: %w", err)
+	}
+
+	if err := loadDotEnvFile(envFilePath); err != nil {
+		return Config{}, fmt.Errorf("load %s: %w", envFilePath, err)
 	}
 
 	cfg := Config{
@@ -50,7 +55,7 @@ func Load() (Config, error) {
 	cfg.ClientSecret = strings.TrimSpace(os.Getenv("YADISK_CLIENT_SECRET"))
 	cfg.RefreshToken = strings.TrimSpace(os.Getenv("YADISK_REFRESH_TOKEN"))
 	cfg.RedirectURI = strings.TrimSpace(os.Getenv("YADISK_REDIRECT_URI"))
-	cfg.EnvFilePath = ".env"
+	cfg.EnvFilePath = envFilePath
 	cfg.OpenRouterAPIKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 
 	cfg.Folder = normalizeDiskPath(os.Getenv("YADISK_FOLDER"))
